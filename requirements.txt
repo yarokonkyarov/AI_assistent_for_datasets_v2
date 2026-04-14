@@ -1,0 +1,8 @@
+click
+psycopg2-binary
+pydantic
+clickhouse-driver
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart

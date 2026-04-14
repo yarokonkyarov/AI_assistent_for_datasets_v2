@@ -1,0 +1,575 @@
+<!-- web/templates/tasks.html -->
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>iiko Loader — Задачи</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .category-badge {
+            display: inline-block;
+            padding: 0.25em 0.6em;
+            font-size: 0.75em;
+            font-weight: 500;
+            line-height: 1;
+            text-align: center;
+            white-space: nowrap;
+            vertical-align: baseline;
+            border-radius: 0.25rem;
+            color: white;
+        }
+        .no-category {
+            background-color: #6c757d;
+        }
+        .badge-active {
+            background-color: #198754;
+        }
+        .badge-inactive {
+            background-color: #6c757d;
+        }
+        .filter-card {
+            background-color: #f8f9fa;
+            border-left: 4px solid #0d6efd;
+        }
+        .actions-column {
+            width: 180px;
+            text-align: center;
+        }
+        .table-hover tbody tr:hover {
+            background-color: rgba(0, 123, 255, 0.05);
+        }
+        .selection-column {
+            width: 40px;
+            text-align: center;
+        }
+        .selected-row {
+            background-color: rgba(13, 110, 253, 0.1) !important;
+        }
+    </style>
+</head>
+<body>
+<div class="container mt-4">
+    <!-- Заголовок и кнопки -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1>Задачи выгрузки данных</h1>
+        <div>
+            <a href="/categories" class="btn btn-outline-info me-2">Управление категориями</a>
+            <a href="/tasks/new" class="btn btn-primary">+ Создать задачу</a>
+        </div>
+    </div>
+
+    <!-- Карточка фильтров -->
+    <div class="card filter-card mb-4">
+        <div class="card-body">
+            <h5 class="card-title mb-3">Фильтры</h5>
+            <form method="get" class="row g-3">
+                <!-- Фильтр по iiko подключению -->
+                <div class="col-md-3">
+                    <label for="iiko_name" class="form-label">Подключение iiko</label>
+                    <select name="iiko_name" id="iiko_name" class="form-select" onchange="this.form.submit()">
+                        <option value="">Все подключения</option>
+                        {% for iiko in iiko_list %}
+                        <option value="{{ iiko.name }}" {% if filters.iiko_name == iiko.name %}selected{% endif %}>
+                            {{ iiko.name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Фильтр по шаблону отчета -->
+                <div class="col-md-3">
+                    <label for="report_name" class="form-label">Шаблон отчета</label>
+                    <select name="report_name" id="report_name" class="form-select" onchange="this.form.submit()">
+                        <option value="">Все шаблоны</option>
+                        {% for report in report_list %}
+                        <option value="{{ report.name }}" {% if filters.report_name == report.name %}selected{% endif %}>
+                            {{ report.name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Фильтр по категории -->
+                <div class="col-md-3">
+                    <label for="category_id" class="form-label">Категория</label>
+                    <select name="category_id" id="category_id" class="form-select" onchange="this.form.submit()">
+                        <option value="">Все категории</option>
+                        {% for category in categories %}
+                        <option value="{{ category.id }}" {% if filters.category_id == category.id %}selected{% endif %}>
+                            {{ category.name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Фильтр по активности -->
+                <div class="col-md-2">
+                    <label for="is_active" class="form-label">Статус</label>
+                    <select name="is_active" id="is_active" class="form-select" onchange="this.form.submit()">
+                        <option value="true" {% if filters.is_active == true %}selected{% endif %}>Активные</option>
+                        <option value="">Все</option>
+                        <option value="false" {% if filters.is_active == false %}selected{% endif %}>Неактивные</option>
+                    </select>
+                </div>
+
+                <!-- Кнопка сброса -->
+                <div class="col-md-1 d-flex align-items-end">
+                    <a href="/tasks" class="btn btn-outline-secondary w-100">Сбросить</a>
+                </div>
+            </form>
+
+            <!-- Информация о фильтрах -->
+            {% if filters.iiko_name or filters.report_name or filters.category_id or filters.is_active is not none %}
+            <div class="mt-3">
+                <small class="text-muted">
+                    Фильтры:
+                    {% if filters.iiko_name %}iiko: <strong>{{ filters.iiko_name }}</strong>{% endif %}
+                    {% if filters.report_name %}{% if filters.iiko_name %}, {% endif %}шаблон: <strong>{{ filters.report_name }}</strong>{% endif %}
+                    {% if filters.category_id %}
+                        {% if filters.iiko_name or filters.report_name %}, {% endif %}категория:
+                        <strong>
+                            {% for category in categories %}
+                                {% if category.id == filters.category_id %}{{ category.name }}{% endif %}
+                            {% endfor %}
+                        </strong>
+                    {% endif %}
+                    {% if filters.is_active is not none %}
+                        {% if filters.iiko_name or filters.report_name or filters.category_id %}, {% endif %}статус:
+                        <strong>{% if filters.is_active %}активные{% else %}неактивные{% endif %}</strong>
+                    {% endif %}
+                </small>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Форма массового обновления -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">Массовое обновление</h5>
+        </div>
+        <div class="card-body">
+            <form method="post" action="/tasks/bulk-update" class="row g-3">
+                <div class="col-md-2">
+                    <label for="days_offset_start" class="form-label">Дней начала</label>
+                    <input type="number" class="form-control" id="days_offset_start" name="days_offset_start" value="14">
+                </div>
+                <div class="col-md-2">
+                    <label for="days_offset_end" class="form-label">Дней окончания</label>
+                    <input type="number" class="form-control" id="days_offset_end" name="days_offset_end" value="0">
+                </div>
+                <div class="col-md-3">
+                    <label for="iiko_name_filter" class="form-label">Фильтр по iiko</label>
+                    <select name="iiko_name_filter" id="iiko_name_filter" class="form-select">
+                        <option value="">Все подключения</option>
+                        {% for iiko in iiko_list %}
+                        <option value="{{ iiko.name }}">{{ iiko.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label for="report_name_filter" class="form-label">Фильтр по шаблону</label>
+                    <select name="report_name_filter" id="report_name_filter" class="form-select">
+                        <option value="">Все шаблоны</option>
+                        {% for report in report_list %}
+                        <option value="{{ report.name }}">{{ report.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-2 d-flex align-items-end">
+                    <button type="submit" class="btn btn-warning w-100">Применить ко всем</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Форма массового запуска -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">Массовый запуск задач</h5>
+        </div>
+        <div class="card-body">
+            <form method="post" action="/tasks/bulk-run" class="row g-3">
+                <div class="col-md-8">
+                    <label for="task_ids" class="form-label">ID задач (через запятую)</label>
+                    <input type="text" class="form-control" id="task_ids" name="task_ids"
+                           placeholder="d5b438bf-40f5-404c-9379-171578f4d755,abc123-def456-ghi789-jkl012-mno345">
+                    <div class="form-text">
+                        Можно выбрать задачи из таблицы:
+                        <div id="selected-tasks" class="mt-2"></div>
+                    </div>
+                </div>
+                <div class="col-md-4 d-flex align-items-end">
+                    <button type="submit" class="btn btn-success w-100"
+                            onclick="return confirm('Запустить выбранные задачи?')">
+                        Запустить выбранные
+                    </button>
+                </div>
+            </form>
+
+            <!-- Кнопки для быстрого выбора -->
+            <div class="mt-3">
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="selectAllTasks()">
+                    Выбрать все задачи
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="selectActiveTasks()">
+                    Только активные
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearSelection()">
+                    Очистить
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Таблица задач -->
+    <div class="card">
+        <div class="card-body">
+            {% if tasks %}
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th class="selection-column">
+                                <input type="checkbox" id="select-all-checkbox" onclick="toggleAllTasks(this)">
+                            </th>
+                            <th>Название</th>
+                            <th>Подключение iiko</th>
+                            <th>Категория</th>
+                            <th>Шаблон отчета</th>
+                            <th>ClickHouse</th>
+                            <th>Дни</th>
+                            <th>Статус</th>
+                            <th>Создана</th>
+                            <th class="actions-column">Действия</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for task in tasks %}
+                        <tr id="task-row-{{ loop.index0 }}">
+                            <!-- Чекбокс выбора -->
+                            <td class="selection-column">
+                                <input type="checkbox"
+                                       class="task-checkbox"
+                                       data-task-id="{{ task.id }}"
+                                       data-task-name="{{ task.name }}"
+                                       onchange="toggleTaskSelection('{{ task.id }}', '{{ task.name }}', this)">
+                            </td>
+
+                            <!-- Название задачи -->
+                            <td>
+                                <strong>{{ task.name }}</strong>
+                                <div class="text-muted small">{{ task.dataset_name }}</div>
+                            </td>
+
+                            <!-- Подключение iiko -->
+                            <td>
+                                {% if task.iiko_connection %}
+                                    {{ task.iiko_connection.name }}
+                                {% else %}
+                                    <span class="text-muted">ID: {{ task.iiko_connection_id }}</span>
+                                {% endif %}
+                            </td>
+
+                            <!-- Категория -->
+                            <td>
+                                {% if task.iiko_connection and task.iiko_connection.category %}
+                                    <span class="category-badge" style="background-color: {{ task.iiko_connection.category.color|default('#4ECDC4') }};">
+                                        {{ task.iiko_connection.category.name }}
+                                    </span>
+                                {% else %}
+                                    <span class="category-badge no-category">Без категории</span>
+                                {% endif %}
+                            </td>
+
+                            <!-- Шаблон отчета -->
+                            <td>
+                                {% if task.report_template %}
+                                    {{ task.report_template.name }}
+                                {% else %}
+                                    <span class="text-muted">ID: {{ task.report_template_id }}</span>
+                                {% endif %}
+                            </td>
+
+                            <!-- Подключение ClickHouse -->
+                            <td>
+                                {% if task.clickhouse_connection %}
+                                    {{ task.clickhouse_connection.name }}
+                                {% else %}
+                                    <span class="text-muted">ID: {{ task.clickhouse_connection_id }}</span>
+                                {% endif %}
+                            </td>
+
+                            <!-- Дни -->
+                            <td>
+                                <div class="text-center">
+                                    <span class="badge bg-info">{{ task.days_offset_start }}</span>
+                                    <span class="text-muted mx-1">→</span>
+                                    <span class="badge bg-info">{{ task.days_offset_end }}</span>
+                                </div>
+                            </td>
+
+                            <!-- Статус -->
+                            <td>
+                                {% if task.is_active %}
+                                    <span class="badge badge-active">Активна</span>
+                                {% else %}
+                                    <span class="badge badge-inactive">Неактивна</span>
+                                {% endif %}
+                            </td>
+
+                            <!-- Дата создания -->
+                            <td>
+                                <small class="text-muted">
+                                    {{ task.created_at.strftime('%d.%m.%Y') }}
+                                </small>
+                            </td>
+
+                            <!-- Действия -->
+                            <td class="actions-column">
+                                <div class="btn-group btn-group-sm" role="group">
+                                    <a href="/tasks/{{ task.id }}/edit"
+                                       class="btn btn-outline-primary"
+                                       title="Изменить">
+                                        Изменить
+                                    </a>
+                                    <form action="/tasks/{{ task.id }}/run" method="post" style="display: inline;">
+                                        <button type="submit"
+                                                class="btn btn-outline-success"
+                                                onclick="return confirm('Запустить задачу \'{{ task.name }}\'?')">
+                                            Запустить
+                                        </button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="text-center py-5">
+                <h4 class="text-muted">Задачи не найдены</h4>
+                <p class="text-muted">
+                    {% if filters.iiko_name or filters.report_name or filters.category_id or filters.is_active is not none %}
+                        Попробуйте изменить фильтры
+                    {% else %}
+                        Создайте первую задачу
+                    {% endif %}
+                </p>
+                <a href="/tasks/new" class="btn btn-primary mt-2">
+                    + Создать первую задачу
+                </a>
+            </div>
+            {% endif %}
+        </div>
+        <div class="card-footer">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <span class="text-muted">
+                        Всего задач: <strong>{{ tasks|length }}</strong>
+                        {% set active_tasks = tasks|selectattr('is_active')|list|length %}
+                        {% if active_tasks > 0 %}
+                            (активных: {{ active_tasks }})
+                        {% endif %}
+                    </span>
+                </div>
+                <div>
+                    <a href="/tasks/new" class="btn btn-sm btn-primary">+ Новая задача</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Навигация -->
+    <div class="mt-4">
+        <a href="/connections" class="btn btn-outline-secondary">← К подключениям</a>
+        <a href="/templates" class="btn btn-outline-secondary ms-2">← К шаблонам отчетов</a>
+        <a href="/categories" class="btn btn-outline-info ms-2">← К категориям</a>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    // Глобальная переменная для хранения выбранных задач
+    let selectedTasks = new Map(); // Map: taskId -> {id, name, element}
+
+    // Функция для переключения выбора задачи
+    function toggleTaskSelection(taskId, taskName, checkboxElement) {
+        const row = checkboxElement.closest('tr');
+
+        if (checkboxElement.checked) {
+            // Добавляем задачу в выбранные
+            selectedTasks.set(taskId, {
+                id: taskId,
+                name: taskName,
+                element: row
+            });
+            row.classList.add('selected-row');
+        } else {
+            // Удаляем задачу из выбранных
+            selectedTasks.delete(taskId);
+            row.classList.remove('selected-row');
+            // Снимаем галочку с "Выбрать все"
+            document.getElementById('select-all-checkbox').checked = false;
+        }
+
+        updateSelectedTasksDisplay();
+    }
+
+    // Функция для выбора всех задач
+    function selectAllTasks() {
+        const checkboxes = document.querySelectorAll('.task-checkbox');
+        checkboxes.forEach(checkbox => {
+            if (!checkbox.checked) {
+                checkbox.checked = true;
+                const taskId = checkbox.getAttribute('data-task-id');
+                const taskName = checkbox.getAttribute('data-task-name');
+                toggleTaskSelection(taskId, taskName, checkbox);
+            }
+        });
+        document.getElementById('select-all-checkbox').checked = true;
+    }
+
+    // Функция для выбора только активных задач
+    function selectActiveTasks() {
+        clearSelection(); // Сначала очищаем выбор
+
+        const checkboxes = document.querySelectorAll('.task-checkbox');
+        checkboxes.forEach(checkbox => {
+            const row = checkbox.closest('tr');
+            const statusBadge = row.querySelector('.badge-active');
+
+            if (statusBadge && statusBadge.textContent.includes('Активна')) {
+                checkbox.checked = true;
+                const taskId = checkbox.getAttribute('data-task-id');
+                const taskName = checkbox.getAttribute('data-task-name');
+                toggleTaskSelection(taskId, taskName, checkbox);
+            }
+        });
+
+        updateSelectAllCheckbox();
+    }
+
+    // Функция для очистки выбора
+    function clearSelection() {
+        const checkboxes = document.querySelectorAll('.task-checkbox');
+        checkboxes.forEach(checkbox => {
+            checkbox.checked = false;
+            const row = checkbox.closest('tr');
+            row.classList.remove('selected-row');
+        });
+
+        selectedTasks.clear();
+        document.getElementById('select-all-checkbox').checked = false;
+        updateSelectedTasksDisplay();
+    }
+
+    // Функция для переключения всех задач
+    function toggleAllTasks(masterCheckbox) {
+        const checkboxes = document.querySelectorAll('.task-checkbox');
+
+        if (masterCheckbox.checked) {
+            selectAllTasks();
+        } else {
+            clearSelection();
+        }
+    }
+
+    // Функция для обновления состояния checkbox "Выбрать все"
+    function updateSelectAllCheckbox() {
+        const totalCheckboxes = document.querySelectorAll('.task-checkbox').length;
+        const checkedCheckboxes = document.querySelectorAll('.task-checkbox:checked').length;
+        document.getElementById('select-all-checkbox').checked = totalCheckboxes > 0 && totalCheckboxes === checkedCheckboxes;
+        document.getElementById('select-all-checkbox').indeterminate = checkedCheckboxes > 0 && checkedCheckboxes < totalCheckboxes;
+    }
+
+    // Функция для обновления отображения выбранных задач
+    function updateSelectedTasksDisplay() {
+        const displayDiv = document.getElementById('selected-tasks');
+        const inputField = document.getElementById('task_ids');
+
+        if (selectedTasks.size === 0) {
+            displayDiv.innerHTML = '<span class="text-muted">Нет выбранных задач</span>';
+            inputField.value = '';
+        } else {
+            const taskIds = Array.from(selectedTasks.keys());
+            const taskNames = Array.from(selectedTasks.values()).map(task => task.name);
+
+            displayDiv.innerHTML = `
+                <div>
+                    <span class="badge bg-info">Выбрано: ${selectedTasks.size}</span>
+                    <small class="text-muted ms-2">
+                        ${taskNames.slice(0, 3).join(', ')}
+                        ${taskNames.length > 3 ? `... и еще ${taskNames.length - 3}` : ''}
+                    </small>
+                </div>
+            `;
+            inputField.value = taskIds.join(', ');
+        }
+
+        updateSelectAllCheckbox();
+    }
+
+    // Инициализация при загрузке страницы
+    document.addEventListener('DOMContentLoaded', function() {
+        // Авто-применение фильтров при изменении
+        const filterSelects = document.querySelectorAll('select[onchange]');
+        filterSelects.forEach(select => {
+            select.onchange = null; // Убираем старый обработчик
+            select.addEventListener('change', function() {
+                // Добавляем индикатор загрузки
+                const form = this.closest('form');
+                const submitBtn = form.querySelector('button[type="submit"]');
+                const originalText = submitBtn ? submitBtn.innerHTML : '';
+
+                if (submitBtn) {
+                    submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Загрузка...';
+                    submitBtn.disabled = true;
+                }
+
+                form.submit();
+            });
+        });
+
+        // Обработка сообщений об успехе/ошибке из URL
+        const urlParams = new URLSearchParams(window.location.search);
+
+        if (urlParams.has('success')) {
+            const message = urlParams.get('success');
+            showAlert('success', decodeURIComponent(message));
+        }
+
+        if (urlParams.has('error')) {
+            const message = urlParams.get('error');
+            showAlert('danger', decodeURIComponent(message));
+        }
+
+        // Инициализируем отображение выбранных задач
+        updateSelectedTasksDisplay();
+    });
+
+    // Функция показа уведомлений
+    function showAlert(type, message) {
+        const alertDiv = document.createElement('div');
+        alertDiv.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+        alertDiv.style.cssText = 'top: 20px; right: 20px; z-index: 9999; max-width: 400px;';
+        alertDiv.innerHTML = `
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+
+        document.body.appendChild(alertDiv);
+
+        // Автоматически скрыть через 5 секунд
+        setTimeout(() => {
+            if (alertDiv.parentNode) {
+                alertDiv.classList.remove('show');
+                setTimeout(() => alertDiv.remove(), 150);
+            }
+        }, 5000);
+    }
+</script>
+</body>
+</html>

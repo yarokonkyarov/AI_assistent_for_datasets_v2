@@ -1,0 +1,60 @@
+<!-- web/templates/templates.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>iiko Loader — Report Templates</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1>Report Templates</h1>
+        <a href="/templates/new" class="btn btn-primary">+ Create Template</a>
+    </div>
+
+    {% if templates %}
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Report Type</th>
+                    <th>Group Fields</th>
+                    <th>Aggregate Fields</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for tpl in templates %}
+                    <tr>
+                        <td><code>{{ tpl.name }}</code></td>
+                        <td>
+                            {% if "reportType" in tpl.default_report_config %}
+                                {{ tpl.default_report_config.reportType }}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if "groupByRowFields" in tpl.default_report_config %}
+                                {{ tpl.default_report_config.groupByRowFields | length }} fields
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if "aggregateFields" in tpl.default_report_config %}
+                                {{ tpl.default_report_config.aggregateFields | length }} fields
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <div class="alert alert-info">No report templates found.</div>
+    {% endif %}
+</div>
+</body>
+</html>
