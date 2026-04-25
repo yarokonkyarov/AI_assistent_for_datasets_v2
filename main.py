@@ -172,5 +172,62 @@ def run_task(task_ids, chunk_days, batch_size, stop_on_error):
         sys.exit(0)
 
 
+@cli.command()
+@click.option('--days-back', default=30, help='За сколько дней назад загружать погоду')
+@click.option('--days-ahead', default=7, help='На сколько дней вперёд загружать прогноз')
+def load_weather(days_back, days_ahead):
+    """Загрузить погоду для подключений с включённым флагом load_weather
+
+    Выбирает все iiko-подключения где load_weather=True и задан iiko_cloud_api_key,
+    получает список организаций с координатами через iiko Cloud API,
+    загружает погоду из Open-Meteo и пишет в ClickHouse (weather_db.daily_weather).
+    """
+    from datetime import date, timedelta
+    from db.repository import list_connections_for_weather, list_clickhouse_connections
+    from core.weather_loader import load_weather_for_connection
+    from clickhouse_driver import Client
+
+    connections = list_connections_for_weather()
+    if not connections:
+        logger.warning("Нет подключений с включённой загрузкой погоды (load_weather=True + api_key)")
+        sys.exit(0)
+
+    logger.info(f"Найдено {len(connections)} подключений для загрузки погоды")
+
+    # Берём первое доступное ClickHouse-подключение
+    ch_connections = list_clickhouse_connections()
+    if not ch_connections:
+        logger.error("Нет ClickHouse-подключений в БД")
+        sys.exit(1)
+    ch = ch_connections[0]
+    ch_client = Client(host=ch.host, port=ch.port, user=ch.user, password=ch.password)
+
+    date_from = date.today() - timedelta(days=days_back)
+    date_to   = date.today() + timedelta(days=days_ahead)
+
+    success_count = 0
+    for conn in connections:
+        logger.info(f"--- Загрузка погоды для подключения: {conn.name} ---")
+        try:
+            ok = load_weather_for_connection(
+                iiko_cloud_api_key=conn.iiko_cloud_api_key,
+                ch_client=ch_client,
+                date_from=date_from,
+                date_to=date_to,
+            )
+            if ok:
+                success_count += 1
+                logger.info(f"Погода для '{conn.name}' загружена успешно")
+            else:
+                logger.warning(f"Погода для '{conn.name}' не загружена (нет данных)")
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке погоды для '{conn.name}': {e}")
+            import traceback
+            traceback.print_exc()
+
+    logger.info(f"Готово. Успешно: {success_count}/{len(connections)}")
+    sys.exit(0 if success_count > 0 else 1)
+
+
 if __name__ == "__main__":
     cli()

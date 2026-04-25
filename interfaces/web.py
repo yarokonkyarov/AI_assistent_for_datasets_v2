@@ -44,9 +44,10 @@ from db.repository import (
     get_categories_with_stats,
     get_tasks_with_details,
 
-    # $C=:F88 4;O @01>BK A :0B53>@8O<8 ?>4:;NG5=89
+    # Функции для работы с категориями подключений
     update_iiko_connection_category
 )
+from db.repository import list_connections_for_weather
 
 app = FastAPI(title="iiko Loader Admin")
 
@@ -540,11 +541,14 @@ async def create_iiko_post(
         login: str = Form(...),
         password: str = Form(...),
         currency: str = Form('RUB'),
-        category_id: Optional[int] = Form(None)
+        category_id: Optional[int] = Form(None),
+        iiko_cloud_api_key: Optional[str] = Form(None),
+        load_weather: bool = Form(False)
 ):
-    """!>740BL ?>4:;NG5=85 iiko A :0B53>@859"""
+    """Создать подключение iiko"""
     try:
-        create_iiko_connection(name, api_url, login, password, currency, category_id)
+        create_iiko_connection(name, api_url, login, password, currency, category_id,
+                               iiko_cloud_api_key, load_weather)
         return RedirectResponse(url="/connections", status_code=303)
     except Exception as e:
         print(f"Error creating iiko connection: {e}")
@@ -575,11 +579,14 @@ async def update_iiko_post(
         login: str = Form(...),
         password: str = Form(...),
         currency: str = Form('RUB'),
-        category_id: Optional[int] = Form(None)
+        category_id: Optional[int] = Form(None),
+        iiko_cloud_api_key: Optional[str] = Form(None),
+        load_weather: bool = Form(False)
 ):
-    """1=>28BL ?>4:;NG5=85 iiko A :0B53>@859"""
+    """Обновить подключение iiko"""
     try:
-        update_iiko_connection(conn_id, name, api_url, login, password, currency, category_id)
+        update_iiko_connection(conn_id, name, api_url, login, password, currency, category_id,
+                               iiko_cloud_api_key, load_weather)
         return RedirectResponse(url="/connections", status_code=303)
     except Exception as e:
         print(f"Error updating iiko connection: {e}")

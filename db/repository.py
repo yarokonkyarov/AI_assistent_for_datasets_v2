@@ -182,6 +182,8 @@ def get_iiko_connection(conn_id: int) -> Optional[IikoConnection]:
                     currency=row.get('currency', 'RUB'),
                     category_id=row.get('category_id'),
                     category=category,
+                    iiko_cloud_api_key=row.get('iiko_cloud_api_key'),
+                    load_weather=row.get('load_weather', False),
                     created_at=row['created_at']
                 )
             return None
@@ -234,6 +236,8 @@ def list_iiko_connections(category_id: Optional[int] = None) -> List[IikoConnect
                     currency=row.get('currency', 'RUB'),
                     category_id=row['category_id'],
                     category=category,
+                    iiko_cloud_api_key=row.get('iiko_cloud_api_key'),
+                    load_weather=row.get('load_weather', False),
                     created_at=row['created_at']
                 )
                 connections.append(connection)
@@ -242,15 +246,20 @@ def list_iiko_connections(category_id: Optional[int] = None) -> List[IikoConnect
 
 def create_iiko_connection(name: str, api_url: str, login: str, password: str,
                            currency: str = 'RUB',
-                           category_id: Optional[int] = None) -> int:
-    """!>740BL ?>4:;NG5=85 iiko A :0B53>@859"""
+                           category_id: Optional[int] = None,
+                           iiko_cloud_api_key: Optional[str] = None,
+                           load_weather: bool = False) -> int:
+    """Создать подключение iiko"""
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO iiko_connections (name, api_url, login, password, currency, category_id)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO iiko_connections
+                    (name, api_url, login, password, currency, category_id,
+                     iiko_cloud_api_key, load_weather)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
-            """, (name, api_url, login, password, currency.upper(), category_id))
+            """, (name, api_url, login, password, currency.upper(), category_id,
+                  iiko_cloud_api_key or None, load_weather))
             row = cur.fetchone()
             conn.commit()
             return row["id"]
@@ -258,16 +267,20 @@ def create_iiko_connection(name: str, api_url: str, login: str, password: str,
 
 def update_iiko_connection(conn_id: int, name: str, api_url: str, login: str,
                            password: str, currency: str = 'RUB',
-                           category_id: Optional[int] = None) -> None:
-    """Обновить подключение iiko с категорией"""
+                           category_id: Optional[int] = None,
+                           iiko_cloud_api_key: Optional[str] = None,
+                           load_weather: bool = False) -> None:
+    """Обновить подключение iiko"""
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE iiko_connections
                 SET name = %s, api_url = %s, login = %s, password = %s,
-                    currency = %s, category_id = %s
+                    currency = %s, category_id = %s,
+                    iiko_cloud_api_key = %s, load_weather = %s
                 WHERE id = %s
-            """, (name, api_url, login, password, currency.upper(), category_id, conn_id))
+            """, (name, api_url, login, password, currency.upper(), category_id,
+                  iiko_cloud_api_key or None, load_weather, conn_id))
             conn.commit()
 
 def update_iiko_connection_category(conn_id: int, category_id: Optional[int] = None) -> bool:
@@ -664,4 +677,53 @@ def bulk_update_tasks_by_filter(
             cur.execute(query, params)
             updated = cur.fetchall()
             conn.commit()
+            return len(updated)
+
+
+# --- Weather ---
+
+def list_connections_for_weather() -> List[IikoConnection]:
+    """Вернуть подключения iiko с включённой загрузкой погоды и заполненным API-ключом"""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT i.*,
+                       c.id as cat_id, c.name as cat_name, c.description as cat_description,
+                       c.color as cat_color, c.is_active as cat_is_active,
+                       c.created_at as cat_created_at, c.updated_at as cat_updated_at
+                FROM iiko_connections i
+                LEFT JOIN categories c ON i.category_id = c.id
+                WHERE i.load_weather = TRUE
+                  AND i.iiko_cloud_api_key IS NOT NULL
+                  AND i.iiko_cloud_api_key != ''
+                ORDER BY i.name
+            """)
+            rows = cur.fetchall()
+            connections = []
+            for row in rows:
+                category = None
+                if row['cat_id']:
+                    category = Category(
+                        id=row['cat_id'],
+                        name=row['cat_name'],
+                        description=row['cat_description'],
+                        color=row['cat_color'],
+                        is_active=row['cat_is_active'],
+                        created_at=row['cat_created_at'],
+                        updated_at=row['cat_updated_at']
+                    )
+                connections.append(IikoConnection(
+                    id=row['id'],
+                    name=row['name'],
+                    api_url=row['api_url'],
+                    login=row['login'],
+                    password=row['password'],
+                    currency=row.get('currency', 'RUB'),
+                    category_id=row['category_id'],
+                    category=category,
+                    iiko_cloud_api_key=row.get('iiko_cloud_api_key'),
+                    load_weather=row.get('load_weather', False),
+                    created_at=row['created_at']
+                ))
+            return connections
             return len(updated)

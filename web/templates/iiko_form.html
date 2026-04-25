@@ -108,6 +108,35 @@
                                 <div class="form-text">Валюта, в которой хранятся суммы в iiko для этого подключения</div>
                             </div>
 
+                            <!-- iiko Cloud API ключ -->
+                            <div class="mb-3">
+                                <label for="iiko_cloud_api_key" class="form-label">API ключ iiko Cloud</label>
+                                <input type="text" class="form-control" id="iiko_cloud_api_key"
+                                       name="iiko_cloud_api_key"
+                                       value="{{ connection.iiko_cloud_api_key if connection and connection.iiko_cloud_api_key else '' }}"
+                                       placeholder="26f57f37298f45d19fceeda826b4e611">
+                                <div class="form-text">
+                                    API ключ для <a href="https://api-ru.iiko.services" target="_blank">api-ru.iiko.services</a>.
+                                    Нужен для получения координат организаций и загрузки погоды.
+                                </div>
+                            </div>
+
+                            <!-- Загружать погоду -->
+                            <div class="mb-4">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" role="switch"
+                                           id="load_weather" name="load_weather" value="true"
+                                           {% if connection and connection.load_weather %}checked{% endif %}>
+                                    <label class="form-check-label" for="load_weather">
+                                        <strong>Загружать погоду</strong>
+                                    </label>
+                                </div>
+                                <div class="form-text">
+                                    Если включено и указан API ключ — при запуске команды <code>load-weather</code>
+                                    будет загружена погода для всех организаций этого подключения.
+                                </div>
+                            </div>
+
                             <!-- Категория -->
                             <div class="mb-4">
                                 <label for="category_id" class="form-label">Категория</label>

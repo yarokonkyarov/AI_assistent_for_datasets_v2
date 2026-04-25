@@ -31,9 +31,13 @@ class IikoConnection(BaseModel):
     password: str
     currency: str = Field('RUB', description="Валюта подключения: RUB, GEL, AMD ...")
 
-    # Добавляем связь с категорией
+    # Связь с категорией
     category_id: Optional[int] = Field(None, description="ID категории")
     category: Optional[Category] = Field(None, description="Объект категории")
+
+    # Погода
+    iiko_cloud_api_key: Optional[str] = Field(None, description="API ключ iiko Cloud для загрузки погоды")
+    load_weather: bool = Field(False, description="Загружать погоду для организаций этого подключения")
 
     created_at: datetime
 
@@ -49,6 +53,8 @@ class IikoConnectionCreate(BaseModel):
     password: str
     currency: str = Field('RUB', description="Валюта подключения")
     category_id: Optional[int] = None
+    iiko_cloud_api_key: Optional[str] = None
+    load_weather: bool = False
 
 
 class IikoConnectionUpdate(BaseModel):
@@ -59,6 +65,8 @@ class IikoConnectionUpdate(BaseModel):
     password: Optional[str] = None
     currency: Optional[str] = None
     category_id: Optional[int] = None
+    iiko_cloud_api_key: Optional[str] = None
+    load_weather: Optional[bool] = None
 
 
 class ClickHouseConnection(BaseModel):

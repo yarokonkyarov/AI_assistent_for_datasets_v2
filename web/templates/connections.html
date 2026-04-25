@@ -59,6 +59,7 @@
                                         <th>Название</th>
                                         <th>Категория</th>
                                         <th>Валюта</th>
+                                        <th>Погода</th>
                                         <th>URL</th>
                                         <th class="actions-column">Действия</th>
                                     </tr>
@@ -86,6 +87,15 @@
                                                 <span class="badge bg-{{ currency_colors.get(conn.currency, 'dark') }}">
                                                     {{ conn.currency }}
                                                 </span>
+                                            </td>
+                                            <td>
+                                                {% if conn.load_weather and conn.iiko_cloud_api_key %}
+                                                    <span class="badge bg-info" title="Загрузка погоды включена">🌤 Вкл</span>
+                                                {% elif conn.load_weather %}
+                                                    <span class="badge bg-warning text-dark" title="Нет API ключа">⚠ Нет ключа</span>
+                                                {% else %}
+                                                    <span class="text-muted">—</span>
+                                                {% endif %}
                                             </td>
                                             <td>
                                                 <small class="text-muted">{{ conn.api_url }}</small>
