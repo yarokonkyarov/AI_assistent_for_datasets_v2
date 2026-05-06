@@ -256,7 +256,7 @@ class IikoOlapDatasetManager:
                 try:
                     self.ch_client.execute(
                         f"ALTER TABLE {db}.{table} "
-                        f"ADD COLUMN IF NOT EXISTS `{col}` Nullable(Float64)"
+                        f"ADD COLUMN IF NOT EXISTS `{col}` Nullable(Float32)"
                     )
                     logger.info(f"Добавлена колонка {col} в {db}.{table}")
                 except Exception as e:
@@ -324,28 +324,80 @@ class IikoOlapDatasetManager:
             return False
 
     def create_dataset(self, fields_config: List[Dict]) -> bool:
-        """Создаёт таблицу на основе списка полей (из генератора или маппинга)"""
+        """Создаёт таблицу на основе списка полей (из генератора или маппинга)
+
+        Оптимизации структуры:
+        - PARTITION BY toYYYYMM(date_field): BI-запрос за месяц читает 1/N партиций
+          вместо полного скана всей таблицы.
+        - ORDER BY (date, Department, ...): первичный индекс → чтение тысяч строк
+          вместо миллионов при фильтрации по дате + подразделению.
+        """
         try:
             db, table = parse_dataset_name(self.dataset_name)
             self.ch_client.execute(f"CREATE DATABASE IF NOT EXISTS {db}")
 
             # Добавляем url, если нет
             if not any(f["name"] == "url" for f in fields_config):
-                fields_config.append({"name": "url", "type": "String", "nullable": False})
+                fields_config.append({"name": "url", "type": "LowCardinality(String)", "nullable": False})
 
             fields_sql = []
             for field in fields_config:
                 sql_type = field["type"]
-                fields_sql.append(f"{field['name']} {sql_type}")
+                fields_sql.append(f"`{field['name']}` {sql_type}")
+
+            # ── Определяем дату и ключ сортировки ─────────────────────────
+            report_type = self.report_template.get("reportType", "SALES")
+            field_mapping = self._get_date_field_mapping(report_type) or {}
+            date_field = field_mapping.get('db_field', '')
+            field_names = {f['name'] for f in fields_config}
+
+            # PARTITION BY — по месяцам, позволяет пропускать старые партиции
+            if date_field and date_field in field_names:
+                partition_sql = f"PARTITION BY toYYYYMM({date_field})"
+            else:
+                partition_sql = ""
+
+            # ORDER BY — предпочтительные ключи по типу отчёта
+            # Порядок важен: сначала дата (позволяет пропускать гранулы),
+            # затем измерения с высокой селективностью
+            ORDER_BY_CANDIDATES = {
+                'SALES':        ['OpenDate_Typed', 'Department', 'DishGroup', 'DishId'],
+                'TRANSACTIONS': ['DateTime_DateTyped', 'Department', 'TransactionType'],
+            }
+            preferred_keys = ORDER_BY_CANDIDATES.get(report_type, [date_field] if date_field else [])
+            order_cols = [col for col in preferred_keys if col in field_names]
+
+            # ClickHouse запрещает Nullable-колонки в ORDER BY.
+            # Принудительно снимаем Nullable() с полей, попавших в ключ сортировки.
+            if order_cols:
+                for field in fields_config:
+                    if field['name'] in order_cols and field['type'].startswith('Nullable('):
+                        field['type'] = field['type'][len('Nullable('):-1]
+                        field['nullable'] = False
+                # Пересобираем fields_sql после возможных изменений типов
+                fields_sql = [f"`{f['name']}` {f['type']}" for f in fields_config]
+                order_sql = f"ORDER BY ({', '.join(order_cols)})"
+            else:
+                order_sql = "ORDER BY tuple()"
+                logger.warning(
+                    f"Таблица {db}.{table} создаётся без первичного индекса (ORDER BY tuple()). "
+                    "Рекомендуется вручную добавить ключевые колонки в ORDER BY."
+                )
+            # ──────────────────────────────────────────────────────────────
 
             storage_policy = self._get_storage_policy()
-            create_sql = (
+            parts = [
                 f"CREATE TABLE IF NOT EXISTS {db}.{table} (\n"
                 f"    {',    '.join(fields_sql)}\n"
-                f") ENGINE = MergeTree()\n"
-                f"ORDER BY tuple()\n"
-                f"SETTINGS storage_policy = '{storage_policy}'"
-            )
+                f") ENGINE = MergeTree()",
+            ]
+            if partition_sql:
+                parts.append(partition_sql)
+            parts.append(order_sql)
+            parts.append(f"SETTINGS storage_policy = '{storage_policy}'")
+            create_sql = "\n".join(parts)
+
+            logger.info(f"Creating table:\n{create_sql}")
             self.ch_client.execute(create_sql)
             logger.info(f"Dataset {self.dataset_name} created")
             return True
@@ -448,16 +500,21 @@ class IikoOlapDatasetManager:
                 # ──────────────────────────────────────────────────────────
 
                 # 🔥 Ключевое: удаление с фильтром по URL
+                # mutations_sync=1 — ждём ПРИМЕНЕНИЯ мутации перед INSERT.
+                # Без этого DELETE асинхронный: старые строки остаются, новые уже вставлены
+                # → дубли в таблице и половина строк без обновлённых полей (Department_Id и др.)
                 delete_sql = f"""
                 ALTER TABLE {db}.{table}
                 DELETE WHERE {field_mapping['db_field']} BETWEEN %(from)s AND %(to)s
                 AND url = %(url)s
+                SETTINGS mutations_sync = 1
                 """
                 self.ch_client.execute(delete_sql, {
                     'from': current_date.strftime('%Y-%m-%d'),
                     'to': chunk_end.strftime('%Y-%m-%d'),
                     'url': self.iiko_api_url
                 })
+                logger.info(f"DELETE mutation applied for {current_date} – {chunk_end}")
 
                 if converted_data:
                     columns = list(converted_data[0].keys())
@@ -511,55 +568,100 @@ class IikoOlapDatasetManager:
         """
         Генерирует схему полей на основе self.report_template.
         Используется при создании таблицы.
+
+        Оптимизации типов:
+        - LowCardinality(String) для полей с малым числом уникальных значений
+          (департаменты, группы блюд, типы транзакций и т.д.)
+        - Float32 вместо Float64 для агрегатных полей — вдвое меньше RAM/диска
+        - Nullable только там, где значение реально может отсутствовать
         """
         report_type = self.report_template.get("reportType", "SALES")
         field_mapping = self._get_date_field_mapping(report_type)
         if not field_mapping:
             raise ValueError(f"Unsupported report type: {report_type}")
 
+        # Поля, которые НИКОГДА не NULL и не нуждаются в Nullable-обёртке
         NON_NULLABLE_FIELDS = {'DateTime_DateTyped', 'UniqOrderId_Id', 'OpenDate_Typed', 'url'}
-        NUMERIC_FIELDS = {'OrderNum': 'Float64', 'HourClose': 'Float64', 'HourOpen': 'Float64'}
+
+        # Числовые group-by поля (Float32 достаточно — это счётчики/индексы)
+        NUMERIC_FIELDS = {
+            'OrderNum': 'Float32', 'HourClose': 'Float32', 'HourOpen': 'Float32',
+            'TableNum': 'Float32', 'GuestNum': 'Float32',
+        }
+
+        # Строковые поля с малым числом уникальных значений → LowCardinality(String)
+        # Ускоряет GROUP BY в 3–10x, экономит RAM.
+        # LowCardinality не поддерживает Nullable напрямую: используем непустую строку-замену.
+        LOW_CARDINALITY_FIELDS = {
+            # Подразделения / юрлица
+            'Department', 'Department_Id', 'Department_JurPerson', 'Department_Code',
+            'Department_Category1', 'Department_Category2', 'Department_Category3',
+            'Department_Category4', 'Department_Category5',
+            # Категории и группы блюд
+            'DishCategory', 'DishCategory_Id',
+            'DishGroup', 'DishGroup_TopParent', 'DishGroup_SecondParent', 'DishGroup_ThirdParent',
+            # Типы и статусы
+            'DishType', 'DeletedWithWriteoff', 'OrderDeleted', 'CookingPlaceType',
+            'OrderDiscount_Type', 'ItemSaleEventDiscountType',
+            # Временны́е измерения
+            'Mounth', 'YearOpen', 'DayOfWeekOpen',
+            # Прочие низкомощностные поля продаж
+            'JurName', 'Conception', 'Store_Name', 'Currencies_Currency',
+            # Поля транзакций
+            'Product_Type', 'TransactionType', 'Contr_Account_Group',
+            'Contr_Product_TopParent', 'Contr_Product_SecondParent', 'Contr_Product_ThirdParent',
+            'Product_MeasureUnit', 'Product_TopParent', 'Product_SecondParent', 'Product_ThirdParent',
+            'Account_CounteragentType', 'Product_Category',
+            # URL подключения — несколько десятков значений
+            'url',
+        }
 
         fields = []
 
         # groupByRowFields
         for field in self.report_template.get("groupByRowFields", []):
             name = field.replace('.', '_').replace('-', '_')
+
             if name in NUMERIC_FIELDS:
-                ftype = NUMERIC_FIELDS[name]
+                # Числовой group-by: Float32, Nullable (может не прийти)
+                fields.append({
+                    "name": name,
+                    "type": f"Nullable({NUMERIC_FIELDS[name]})",
+                    "nullable": True
+                })
             elif name == field_mapping['db_field']:
+                # Поле даты — всегда NOT NULL
                 ftype = 'Date' if report_type in ('SALES', 'TRANSACTIONS') else 'DateTime'
+                fields.append({"name": name, "type": ftype, "nullable": False})
+            elif name in LOW_CARDINALITY_FIELDS:
+                # Строка с малым числом значений — LowCardinality, NOT NULL (пустая строка вместо NULL)
+                fields.append({"name": name, "type": "LowCardinality(String)", "nullable": False})
+            elif name in NON_NULLABLE_FIELDS:
+                fields.append({"name": name, "type": "String", "nullable": False})
             else:
-                ftype = 'String'
+                # Прочие строки: Nullable
+                fields.append({"name": name, "type": "Nullable(String)", "nullable": True})
 
-            is_nullable = name not in NON_NULLABLE_FIELDS
-            field_def = {
-                "name": name,
-                "type": f"Nullable({ftype})" if is_nullable else ftype,
-                "nullable": is_nullable
-            }
-            fields.append(field_def)
-
-        # aggregateFields → Nullable(Float64)
+        # aggregateFields → Nullable(Float32)   [было Float64 — вдвое меньше места]
         # + дублирующие *_RUB поля, если конвертация включена
         for field in self.report_template.get("aggregateFields", []):
             name = field.replace('.', '_').replace('-', '_')
             fields.append({
                 "name": name,
-                "type": "Nullable(Float64)",
+                "type": "Nullable(Float32)",
                 "nullable": True
             })
             if self.currency_conversion_enabled:
                 fields.append({
                     "name": f"{name}_RUB",
-                    "type": "Nullable(Float64)",
+                    "type": "Nullable(Float32)",
                     "nullable": True
                 })
 
         # url
         fields.append({
             "name": "url",
-            "type": "String",
+            "type": "LowCardinality(String)",
             "nullable": False
         })
 
