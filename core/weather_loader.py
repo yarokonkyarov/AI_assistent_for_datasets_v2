@@ -44,6 +44,28 @@ CREATE TABLE IF NOT EXISTS weather_db.daily_weather (
 ORDER BY (date, org_id)
 """
 
+# ─── Схема справочника организаций ───────────────────────────────────────────
+
+CREATE_ORGS_REF_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS weather_db.organizations_ref (
+    org_id           String          COMMENT 'UUID организации из iiko Cloud',
+    org_name         String          COMMENT 'Техническое название в iiko (К 1, К 2...)',
+    org_code         String          COMMENT 'Короткий код заведения (999, 001...)',
+    address          String          COMMENT 'Адрес ресторана',
+    country          LowCardinality(String) COMMENT 'Страна',
+    lat              Nullable(Float64) COMMENT 'Широта',
+    lon              Nullable(Float64) COMMENT 'Долгота',
+    inn              String          COMMENT 'ИНН юридического лица',
+    currency         LowCardinality(String) COMMENT 'Код валюты (RUB, USD...)',
+    delivery_type    LowCardinality(String) COMMENT 'CourierAndSelfService / SelfServiceOnly / NoDelivery',
+    iiko_version     String          COMMENT 'Версия ПО iiko на момент синхронизации',
+    api_key_hint     String          COMMENT 'Первые 8 символов API-ключа (для идентификации подключения)',
+    synced_at        DateTime        DEFAULT now() COMMENT 'Время последней синхронизации'
+) ENGINE = ReplacingMergeTree(synced_at)
+ORDER BY org_id
+COMMENT 'Справочник организаций iiko Cloud. Обновляется при каждой загрузке погоды.'
+"""
+
 
 # ─── iiko Cloud API ──────────────────────────────────────────────────────────
 
@@ -69,8 +91,11 @@ def get_iiko_cloud_token(api_key: str) -> Optional[str]:
 
 def get_iiko_organizations(api_key: str) -> List[Dict]:
     """
-    Возвращает список организаций с координатами.
-    Каждый элемент: {id, name, lat, lon, address}
+    Возвращает список организаций со всеми полезными полями из iiko Cloud API.
+
+    Каждый элемент содержит:
+      id, name, code, address, country, lat, lon,
+      inn, currency, delivery_type, iiko_version
     """
     token = get_iiko_cloud_token(api_key)
     if not token:
@@ -93,15 +118,27 @@ def get_iiko_organizations(api_key: str) -> List[Dict]:
         for org in data.get("organizations", []):
             lat = org.get("latitude")
             lon = org.get("longitude")
-            if lat and lon and lat != 0 and lon != 0:
-                result.append({
-                    "id":      org["id"],
-                    "name":    org.get("name", "").strip(),
-                    "lat":     float(lat),
-                    "lon":     float(lon),
-                    "address": org.get("restaurantAddress", ""),
-                })
-        logger.info(f"Got {len(result)} organizations with coordinates")
+
+            # Координаты нужны для погоды — орги без них тоже попадают в справочник
+            lat_val = float(lat) if lat and lat != 0 else None
+            lon_val = float(lon) if lon and lon != 0 else None
+
+            result.append({
+                "id":            org["id"],
+                "name":          org.get("name", "").strip(),
+                "code":          str(org.get("code", "") or ""),
+                "address":       (org.get("restaurantAddress") or "").strip(),
+                "country":       (org.get("country") or "").strip(),
+                "lat":           lat_val,
+                "lon":           lon_val,
+                "inn":           str(org.get("inn") or ""),
+                "currency":      str(org.get("currencyIsoName") or "RUB"),
+                "delivery_type": str(org.get("deliveryServiceType") or ""),
+                "iiko_version":  str(org.get("version") or ""),
+            })
+
+        with_coords = sum(1 for o in result if o["lat"] is not None)
+        logger.info(f"Got {len(result)} organizations ({with_coords} with coordinates)")
         return result
     except Exception as e:
         logger.error(f"get_organizations error: {e}")
@@ -258,9 +295,59 @@ def fetch_weather(lat: float, lon: float,
 
 # ─── ClickHouse ───────────────────────────────────────────────────────────────
 
-def _init_weather_table(ch: Client) -> None:
+def _init_tables(ch: Client) -> None:
+    """Создаёт weather_db и все таблицы если не существуют."""
     ch.execute("CREATE DATABASE IF NOT EXISTS weather_db")
     ch.execute(CREATE_WEATHER_TABLE_SQL)
+    ch.execute(CREATE_ORGS_REF_TABLE_SQL)
+
+
+def sync_org_reference(api_key: str, ch: Client) -> int:
+    """
+    Синхронизирует справочник организаций weather_db.organizations_ref.
+
+    Вызывается при каждой загрузке погоды — обновляет данные из iiko Cloud.
+    Использует ReplacingMergeTree: повторная вставка заменяет старую запись
+    по org_id (берётся строка с максимальным synced_at).
+
+    Возвращает количество обработанных организаций.
+    """
+    orgs = get_iiko_organizations(api_key)
+    if not orgs:
+        logger.warning("sync_org_reference: no organizations returned")
+        return 0
+
+    # Первые 8 символов ключа — для идентификации подключения в справочнике
+    api_key_hint = api_key[:8] + "..."
+
+    rows = []
+    for org in orgs:
+        rows.append({
+            "org_id":        org["id"],
+            "org_name":      org["name"],
+            "org_code":      org["code"],
+            "address":       org["address"],
+            "country":       org["country"],
+            "lat":           org["lat"],
+            "lon":           org["lon"],
+            "inn":           org["inn"],
+            "currency":      org["currency"],
+            "delivery_type": org["delivery_type"],
+            "iiko_version":  org["iiko_version"],
+            "api_key_hint":  api_key_hint,
+        })
+
+    ch.execute(
+        "INSERT INTO weather_db.organizations_ref "
+        "(org_id, org_name, org_code, address, country, lat, lon, "
+        " inn, currency, delivery_type, iiko_version, api_key_hint) VALUES",
+        rows
+    )
+    logger.info(f"organizations_ref: upserted {len(rows)} organizations (key: {api_key_hint})")
+    return len(rows)
+
+
+# ─── weather table helpers ────────────────────────────────────────────────────
 
 
 def _delete_weather(ch: Client, org_ids: List[str],
@@ -302,20 +389,29 @@ def load_weather_for_connection(
     """
     logger.info(f"Loading weather {date_from} – {date_to}")
 
-    # 1. Получаем организации с координатами
-    orgs = get_iiko_organizations(iiko_cloud_api_key)
-    if not orgs:
+    # 1. Получаем все организации (включая без координат)
+    all_orgs = get_iiko_organizations(iiko_cloud_api_key)
+    if not all_orgs:
         logger.warning("No organizations returned — skipping")
         return False
 
-    # 2. Кластеризуем по городу
+    # 2. Инициализируем таблицы
+    _init_tables(ch_client)
+
+    # 3. Синхронизируем справочник — ВСЕ организации (с координатами и без)
+    sync_org_reference(iiko_cloud_api_key, ch_client)
+
+    # 4. Для погоды нужны только орги с координатами
+    orgs = [o for o in all_orgs if o["lat"] is not None and o["lon"] is not None]
+    if not orgs:
+        logger.warning("No organizations with coordinates — weather skipped")
+        return False
+
+    # 5. Кластеризуем по городу
     clustered = cluster_organizations(orgs, radius_km=5.0)
     logger.info(f"{len(orgs)} orgs → {len(set(o['city_cluster'] for o in clustered))} city clusters")
 
-    # 3. Инициализируем таблицу
-    _init_weather_table(ch_client)
-
-    # 4. Уникальные кластеры (lat/lon)
+    # 6. Уникальные кластеры (lat/lon)
     seen_clusters: Dict[str, List[Dict]] = {}  # city_cluster → [org_rows]
     for o in clustered:
         seen_clusters.setdefault(o["city_cluster"], []).append(o)
