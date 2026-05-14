@@ -27,6 +27,7 @@ class CurrencyConverter:
         'RUB': 'rub',
         'GEL': 'gel',
         'AMD': 'amd',
+        'KGS': 'kgs',
     }
 
     def __init__(
