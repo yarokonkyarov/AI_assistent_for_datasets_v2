@@ -139,15 +139,28 @@ class IikoOlapDatasetManager:
 
     def _convert_field_names(self, data: List[Dict], table_columns: List[str]) -> List[Dict]:
         converted_data = []
+        dropped_fields = set()
         for item in data:
             converted_item = {}
             for key, value in item.items():
                 new_key = key.replace('.', '_').replace('-', '_')
                 if new_key in table_columns:
                     converted_item[new_key] = value
+                else:
+                    dropped_fields.add(key)
             converted_item['url'] = self.iiko_api_url
             if converted_item:
                 converted_data.append(converted_item)
+
+        # Предупреждаем об отброшенных полях один раз за запуск, а не на каждый чанк
+        already_reported = getattr(self, '_reported_dropped_fields', set())
+        new_dropped = dropped_fields - already_reported
+        if new_dropped:
+            logger.warning(
+                f"Поля отчёта без колонки в таблице — данные ОТБРАСЫВАЮТСЯ: {sorted(new_dropped)}. "
+                f"Проверьте соответствие шаблона и схемы таблицы."
+            )
+            self._reported_dropped_fields = already_reported | new_dropped
         return converted_data
 
     def _convert_field_types(self, data: List[Dict], table_columns_info: List[Tuple]) -> List[Dict]:
@@ -236,6 +249,33 @@ class IikoOlapDatasetManager:
     # ──────────────────────────────────────────────
     # Конвертация валют
     # ──────────────────────────────────────────────
+
+    def _ensure_template_columns(self, db: str, table: str) -> None:
+        """
+        Schema evolution: добавляет в существующую таблицу колонки для полей шаблона,
+        которых в ней ещё нет (поле добавили в шаблон после создания таблицы).
+        Типы — те же, что при создании таблицы (generate_fields_config).
+        История для новых колонок остаётся пустой, заполняются только новые загрузки.
+        """
+        try:
+            existing = {
+                row[0]
+                for row in self.ch_client.execute(f"DESCRIBE TABLE {db}.{table}")
+            }
+            for field in self.generate_fields_config():
+                name = field["name"]
+                if name in existing:
+                    continue
+                self.ch_client.execute(
+                    f"ALTER TABLE {db}.{table} "
+                    f"ADD COLUMN IF NOT EXISTS `{name}` {field['type']}"
+                )
+                logger.warning(
+                    f"Schema evolution: в {db}.{table} добавлена колонка "
+                    f"`{name}` {field['type']} — поле есть в шаблоне, колонки не было"
+                )
+        except Exception as e:
+            logger.error(f"Schema evolution для {db}.{table} не удалась: {e}")
 
     def _ensure_rub_columns(self, db: str, table: str, rub_columns: List[str]) -> None:
         """
@@ -425,6 +465,10 @@ class IikoOlapDatasetManager:
                 return False
 
             db, table = parse_dataset_name(self.dataset_name)
+
+            # Schema evolution: добавляем колонки для новых полей шаблона до чтения схемы
+            self._ensure_template_columns(db, table)
+
             desc_sql = f"DESCRIBE TABLE {db}.{table}"
             table_columns_info = self.ch_client.execute(desc_sql)
             table_columns = [col[0] for col in table_columns_info]
