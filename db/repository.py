@@ -594,6 +594,18 @@ def create_report_template(name: str, default_report_config: dict) -> int:
             return row["id"]
 
 
+def update_report_template(template_id: int, name: str, default_report_config: dict) -> None:
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            config_json = json.dumps(default_report_config, ensure_ascii=False)
+            cur.execute("""
+                UPDATE report_templates
+                SET name = %s, default_report_config = %s
+                WHERE id = %s
+            """, (name, config_json, template_id))
+            conn.commit()
+
+
 def update_task(
         task_id: UUID,
         name: str,

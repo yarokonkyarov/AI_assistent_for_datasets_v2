@@ -29,6 +29,7 @@ from db.repository import (
     create_iiko_connection,
     create_clickhouse_connection,
     create_report_template,
+    update_report_template,
     bulk_update_tasks_by_filter,
     update_iiko_connection,
     update_clickhouse_connection,
@@ -666,4 +667,32 @@ async def create_template_post(
     import json
     config_dict = json.loads(default_report_config)
     create_report_template(name=name, default_report_config=config_dict)
+    return RedirectResponse(url="/templates", status_code=303)
+
+
+@app.get("/templates/{template_id}/edit", response_class=HTMLResponse)
+async def edit_template_form(request: Request, template_id: int):
+    import json
+    tpl = get_report_template(template_id)
+    if not tpl:
+        raise HTTPException(status_code=404, detail="Шаблон не найден")
+    return templates.TemplateResponse("template_form.html", {
+        "request": request,
+        "template": tpl,
+        "config_json": json.dumps(tpl.default_report_config, ensure_ascii=False, indent=2)
+    })
+
+
+@app.post("/templates/{template_id}", response_class=RedirectResponse)
+async def update_template_post(
+        request: Request,
+        template_id: int,
+        name: str = Form(...),
+        default_report_config: str = Form(...)
+):
+    import json
+    if not get_report_template(template_id):
+        raise HTTPException(status_code=404, detail="Шаблон не найден")
+    config_dict = json.loads(default_report_config)
+    update_report_template(template_id, name=name, default_report_config=config_dict)
     return RedirectResponse(url="/templates", status_code=303)

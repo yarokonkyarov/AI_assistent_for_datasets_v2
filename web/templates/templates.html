@@ -21,6 +21,7 @@
                     <th>Report Type</th>
                     <th>Group Fields</th>
                     <th>Aggregate Fields</th>
+                    <th></th>
                 </tr>
             </thead>
             <tbody>
@@ -47,6 +48,9 @@
                             {% else %}
                                 —
                             {% endif %}
+                        </td>
+                        <td>
+                            <a href="/templates/{{ tpl.id }}/edit" class="btn btn-sm btn-outline-primary">Edit</a>
                         </td>
                     </tr>
                 {% endfor %}
